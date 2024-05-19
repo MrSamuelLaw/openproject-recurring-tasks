@@ -1,25 +1,58 @@
-import re
 import json
 import asyncio
 import aiohttp
 import logging
+import time
+from os import environ
+from base64 import b64encode
+from typing import ClassVar, Self, Optional
+from pydantic import BaseModel, Field, ConfigDict
 
 
-from models import (APIConfig,
-                    Project,
-                    WorkPackageType,
-                    WorkPackageSchema,
-                    WorkPackageStatus,
-                    WorkPackageRelation,
-                    SharedContext,
-                    WorkPackage,
-                    project_id,
-                    schema_id)
-
+# ————————————————————————— Module Scoped Variables —————————————————————————
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
+
+# ————————————————————————— Models —————————————————————————
+
+class APIConfig(BaseModel):
+    """Class that is used to hold environment variables.
+    """
+
+    _instance: ClassVar[Self | None] = None
+
+    model_config = ConfigDict(frozen=True)
+
+    api_key:    str  = Field()
+    host:       str  = Field()
+    https:      bool = Field(True)
+    verify_ssl: bool = Field(True)
+    port:       Optional[int]  = Field(None)
+
+    @classmethod
+    def from_env(cls) -> Self:
+        """Reads the configs from environment variables on the first call
+        subsequent calls return the originally parsed values to avoid bugs
+        related to environment variables changing during runtime either by
+        mistake or malice.
+        """
+        if cls._instance is None:
+            data = {key: environ.get(key.upper()) for key in cls.model_fields.keys()}
+            cls._instance = cls(**data)
+        return cls._instance
+
+    @property
+    def api_token(self) -> bytes:
+        """Returns a b64 encoded api key for the authorization header
+        """
+        token = f'apikey:{self.api_key}'.encode()
+        token = b64encode(token).decode()
+        return token
+
+
+# ————————————————————————— Functions —————————————————————————
 
 def build_url(config: APIConfig, endpoint: str) -> str:
     """Returns a url for the endpoint using the apps configs.
@@ -29,22 +62,7 @@ def build_url(config: APIConfig, endpoint: str) -> str:
     return url
 
 
-def build_work_package_payload(work_package: WorkPackage, schema: WorkPackageSchema) -> dict:
-    """Builds the payload to create a workpackage from a given work package model
-    """
-    payload = work_package.model_dump(by_alias=True)
-    schema_data = schema.model_dump(by_alias=True)
-
-    for key, obj in schema_data.items():
-        if isinstance(obj, dict) and obj.get('writable') == False:
-            if key in payload.keys():
-                del payload[key]
-            elif key in payload['_links'].keys():
-                del payload['_links'][key]
-    return payload
-
-
-async def query_projects(config: APIConfig, filters: dict = None) -> list[Project]:
+async def query_projects(filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
     """Returns a list of projects using the filters provided
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
@@ -53,19 +71,18 @@ async def query_projects(config: APIConfig, filters: dict = None) -> list[Projec
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
             'Authorization': f'Basic {config.api_token}',
-
         }
         params = {}
-        if filters is not None: params['filters'] = filters;
+        if filters is not None:
+            params['filters'] = filters if isinstance(filters, str) else json.dumps(filters)
         async with session.get(url, headers=headers, params=params) as response:
-            data = await response.json()
-            projects = [Project(**obj) for obj in data['_embedded']['elements']]
-            return projects
+            data: dict = await response.json()
+            return data
 
 
-async def query_project_types(config: APIConfig, id: project_id) -> list[WorkPackageType]:
+async def query_work_package_types(project_id: int, config: APIConfig=APIConfig.from_env()) -> dict:
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/projects/{id}/types')
+        url = build_url(config, f'api/v3/projects/{project_id}/types')
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
@@ -73,27 +90,27 @@ async def query_project_types(config: APIConfig, id: project_id) -> list[WorkPac
 
         }
         async with session.get(url, headers=headers) as response:
-            data = await response.json()
-            work_package_types = [WorkPackageType(**obj) for obj in data['_embedded']['elements']]
-            return work_package_types
+            data: dict = await response.json()
+            return data
 
 
-async def query_work_package_statuses(config: APIConfig) -> list[WorkPackageStatus]:
+async def query_work_package_schema(project_id: int, work_package_type_id: int, config: APIConfig=APIConfig.from_env()) -> dict:
+    """Queries the work package schema for a project id given the work package type id
+    also has the side effect of updating the WorkPackage model field map
+    """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, 'api/v3/statuses')
+        url = build_url(config, f'api/v3/work_packages/schemas/{project_id}-{work_package_type_id}')
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
             'Authorization': f'Basic {config.api_token}',
-
         }
         async with session.get(url, headers=headers) as response:
-            data = await response.json()
-            work_package_status = [WorkPackageStatus(**obj) for obj in data['_embedded']['elements']]
-            return work_package_status
+            data: dict = await response.json()
+            return data
 
 
-async def query_work_packages(config: APIConfig, offset: int=1, page_size: int=1000, filters: dict | None =None) -> list[WorkPackage]:
+async def query_work_packages(offset: int=1, page_size: int=1000, filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
     """Returns a list of work packages using the filters provided.
     Results are limited to the page_size specified.
     """
@@ -103,38 +120,19 @@ async def query_work_packages(config: APIConfig, offset: int=1, page_size: int=1
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
             'Authorization': f'Basic {config.api_token}',
-
         }
         params = {
             'offset': offset,
             'pageSize': page_size,
         }
-        # if filters is not None: params['filters'] = json.dumps(filters)
-        if filters is not None: params['filters'] = filters;
+        if filters is not None:
+            params['filters'] = filters if isinstance(filters, str) else json.dumps(filters)
         async with session.get(url, headers=headers, params=params) as response:
-            data = await response.json()
-            work_packages = [WorkPackage(**obj) for obj in data['_embedded']['elements']]
-            return work_packages
+            data: dict = await response.json()
+            return data
 
 
-async def query_work_package_schema(config: APIConfig, id: schema_id) -> WorkPackageSchema:
-    """Queries the work package schema for a project id given the workpackage type id
-    also has the side effect of updating the WorkPackage model field map
-    """
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/work_packages/schemas/{id[0]}-{id[1]}')
-        headers = {
-            'Accept': 'application/hal+json',
-            'Content-Type': 'application/hal+json',
-            'Authorization': f'Basic {config.api_token}',
-        }
-        async with session.get(url, headers=headers) as response:
-            data = await response.json()
-            schema = WorkPackageSchema(**data)
-            return schema
-
-
-async def query_work_package_relations(config: APIConfig, filters: dict | None =None) -> list[WorkPackageRelation]:
+async def query_work_package_relations(filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
         url = build_url(config, f'api/v3/relations')
         headers = {
@@ -143,54 +141,33 @@ async def query_work_package_relations(config: APIConfig, filters: dict | None =
             'Authorization': f'Basic {config.api_token}',
         }
         params = {}
-        if filters is not None: params['filters'] = filters;
+        if filters is not None:
+            params['filters'] = filters if isinstance(filters, str) else json.dumps(filters)
         async with session.get(url, headers=headers, params=params) as response:
-            data = await response.json()
-            relations = [WorkPackageRelation(**obj) for obj in data['_embedded']['elements']]
-            return relations
+            data: dict = await response.json()
+            return data
 
 
-async def build_shared_context(config: APIConfig):
-    # get a list of the projects for the global context
-    projects = await query_projects(APIConfig.from_env())
-    SharedContext.projects.update({p.id: p for p in projects})
-
-    # get a list of types for the global context & compute needed schemas
-    async def build_project_type_map(project: Project):
-        work_package_types = await query_project_types(config, project.id)
-        SharedContext.work_package_types.update({wpt.id: wpt for wpt in work_package_types})
-        SharedContext.work_package_schemas.update({(project.id, wpt.id): None for wpt in work_package_types})
-
-    await asyncio.gather(*[build_project_type_map(p) for p in projects])
-
-    # get a list of schemas
-    schema_ids = [k for k, v in SharedContext.work_package_schemas.items() if v is None]
-    schemas = await asyncio.gather(*[query_work_package_schema(config, id_) for id_ in schema_ids])
-    SharedContext.work_package_schemas.update({s.id: s for s in schemas})
-
-
-async def create_work_package(config: APIConfig, project: Project, schema: WorkPackageSchema, work_package: WorkPackage) -> WorkPackage:
+async def create_work_package(project_id: int, payload: dict, notify: bool=True, config: APIConfig=APIConfig.from_env()) -> dict:
     """Creates a work package in the given project and returns the newly created work package
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/projects/{project.id}/work_packages')
-        payload = build_work_package_payload(work_package, schema)
+        url = build_url(config, f'api/v3/projects/{project_id}/work_packages')
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/json',
             'Authorization': f'Basic {config.api_token}',
         }
         params = {
-            'notify': 'true'
+            'notify': int(notify)
         }
         payload = json.dumps(payload, default=str)
         async with session.post(url, data=payload, headers=headers, params=params) as response:
-            data = await response.json()
-            new_work_package = WorkPackage(**data)
-            return new_work_package
+            data: dict = await response.json()
+            return data
 
 
-async def create_relation(config: APIConfig, work_package_id: int, work_package_relation: WorkPackageRelation) -> WorkPackageRelation:
+async def create_relation(work_package_id: int, payload: dict, config: APIConfig=APIConfig.from_env()) -> dict:
     """Creates a relation between two work packages
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
@@ -200,8 +177,7 @@ async def create_relation(config: APIConfig, work_package_id: int, work_package_
             'Content-Type': 'application/json',
             'Authorization': f'Basic {config.api_token}',
         }
-        payload = work_package_relation.model_dump_json(exclude_none=True, by_alias=True)
+        payload = json.dumps(payload, default=str)
         async with session.post(url, data=payload, headers=headers) as response:
-            data = await response.json()
-            relation = WorkPackageRelation(**data)
-            return relation
+            data: dict = await response.json()
+            return data

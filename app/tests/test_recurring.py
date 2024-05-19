@@ -1,19 +1,25 @@
 import asyncio
 import unittest
-import recurring
-from models import APIConfig, WorkPackage
-
+from unittest.mock import AsyncMock, patch
+from recurring import Project
 
 
 class TestCommon(unittest.TestCase):
 
-    def test_can_query_templates(self):
-        config = APIConfig.from_env()
-        asyncio.run(recurring.build_shared_context(config))
-        templates = asyncio.run(recurring.query_templates(config))
-        clones = asyncio.run(recurring.build_clone_info(config, templates))
-        new_work_package = asyncio.run(recurring.create_clone(config, clones[0]))
-        new_work_package
+    @patch('recurring.com', new_callable=AsyncMock)
+    def test_can_query_templates(self, mock_com):
+        mock_com.query_projects.return_value = {
+            '_embedded': {'elements': [
+                {
+                    'id': -1,
+                    'active': True,
+                    'name': 'Mocked'
+                }
+            ]}
+        }
+        result = asyncio.run(Project.query_projects())
+        project = result[0]
+        self.assertEqual(project.id, -1)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=False)

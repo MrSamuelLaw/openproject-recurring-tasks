@@ -1,66 +1,281 @@
-import json
+import logging
 import asyncio
-import common
+from re import fullmatch
 from itertools import chain
 from collections import defaultdict
 from datetime import date, timedelta
-from models import (APIConfig,
-                    SharedContext,
-                    Project,
-                    WorkPackage,
-                    WorkPackageRelation,
-                    WorkPackageCloneInfo)
+from typing import Self, ClassVar, Any, Optional, Any
+from pydantic import BaseModel, ConfigDict, Field
+import common as com
 
 
-async def build_shared_context(config: APIConfig):
-    # get a list of the projects for the global context
-    projects = await common.query_projects(APIConfig.from_env())
-    SharedContext.projects.update({p.id: p for p in projects})
-
-    # get a list of types for the global context & compute needed schemas
-    async def build_project_type_map(project: Project):
-        work_package_types = await common.query_project_types(config, project.id)
-        SharedContext.work_package_types.update({wpt.id: wpt for wpt in work_package_types})
-        SharedContext.work_package_schemas.update({(project.id, wpt.id): None for wpt in work_package_types})
-
-    await asyncio.gather(*[build_project_type_map(p) for p in projects])
-
-    # get a list of schemas
-    schema_ids = [k for k, v in SharedContext.work_package_schemas.items() if v is None]
-    schemas = await asyncio.gather(*[common.query_work_package_schema(config, id_) for id_ in schema_ids])
-    SharedContext.work_package_schemas.update({s.id: s for s in schemas})
+logging.basicConfig(level=logging.DEBUG)
+LOGGER = logging.getLogger(__name__)
 
 
-async def query_templates(config: APIConfig) -> list[WorkPackage]:
+# ————————————————————————— Decorators —————————————————————————
+
+def cache_async(async_func):
+    _cache = {}
+    async def wrapper(*args, **kwargs):
+        key = list(args)
+        key.extend([(k, v) for k, v in kwargs.items()])
+        key = hash(tuple(key))
+        if key in _cache.keys():
+            result = _cache[key]
+        else:
+            result = await async_func(*args, **kwargs)
+            _cache[key] = result
+        return result
+    wrapper._cache = _cache
+    return wrapper
+
+
+# ————————————————————————— Models —————————————————————————
+
+class WorkPackageType(BaseModel):
+
+    model_config = ConfigDict(extra='ignore')
+
+    id: int = Field()
+    name: str = Field()
+
+    def __hash__(self):
+        return self.id
+
+
+class Project(BaseModel):
+
+    model_config = ConfigDict(extra='ignore')
+
+    id: int =       Field()
+    active: bool =  Field()
+    name: str =     Field()
+
+    def __hash__(self) -> int:
+        return self.id
+
+    @classmethod
+    @cache_async
+    async def query_projects(cls, filters: Optional[dict]=None) -> list[Self]:
+        data = await com.query_projects(filters)
+        projects = [cls(**obj) for obj in data['_embedded']['elements']]
+        return projects
+
+    @cache_async
+    async def query_work_package_types(self) -> list[WorkPackageType]:
+        data = await com.query_work_package_types(self.id)
+        types = [WorkPackageType(**obj) for obj in data['_embedded']['elements']]
+        return types
+
+
+class WorkPackageSchema(BaseModel):
+    """Class that represents a schema for a work package.
+    Note, the schemas are made to sanitize the template when
+    creating it.
+    """
+
+    model_config = ConfigDict(extra='allow')
+
+    custom_field_name_map: ClassVar[dict] = {}
+
+    links: dict = Field(alias='_links')
+
+    def __hash__(self):
+        return self.schema_id
+
+    @property
+    def schema_id(self) -> tuple[int, int]:
+        project_id, type_id = self.links['self']['href'].split('/')[-1].split('-')
+        return (int(project_id), int(type_id))
+
+    @property
+    def project_id(self) -> int:
+        return self.schema_id[0]
+
+    @property
+    def type_id(self) -> int:
+        return self.schema_id[1]
+
+    @classmethod
+    @cache_async
+    async def query_work_package_schema(cls, project_id: int, work_package_type_id: int) -> Self:
+        data = await com.query_work_package_schema(project_id, work_package_type_id)
+        schema = cls(**data)
+        schema._update_custom_field_name_map()
+        return schema
+
+    def _update_custom_field_name_map(self):
+        pattern = r'customField\d+'
+        custom_fields = {v['name']: k for k, v in self.model_dump().items() if fullmatch(pattern, k)}
+        self.custom_field_name_map.update(custom_fields)
+
+    def __getitem__(self, key: str):
+        key = self.custom_field_name_map.get(key, key)
+        return getattr(self, key)
+
+    def get(self, key: str, fallback=None):
+        key = self.custom_field_name_map.get(key, key)
+        return getattr(self, key, fallback)
+
+
+class WorkPackageRelation(BaseModel):
+
+    model_config = ConfigDict(extra='allow')
+
+    id: Optional[int] = Field(None)
+    links: dict = Field(alias='_links')
+
+    @property
+    def to(self) -> int:
+        return int(self.links['to']['href'].split('/')[-1])
+
+    @to.setter
+    def to(self, value) -> int:
+        parts = self.links['to']['href'].split('/')
+        parts[-1] = value
+        self.link['to']['href'] = '/'.join(parts)
+
+    @property
+    def from_(self) -> int:
+        return int(self.links['from']['href'].split('/')[-1])
+
+    @from_.setter
+    def from_(self, value) -> int:
+        parts = self.links['from']['href'].split('/')
+        parts[-1] = value
+        self.link['from']['href'] = '/'.join(parts)
+
+    @classmethod
+    async def query_work_package_relations(cls, filters: Optional[dict]=None) -> list[Self]:
+        data = await com.query_work_package_relations(filters=filters)
+        relations = [cls(**obj) for obj in data['_embedded']['elements']]
+        return relations
+
+
+class WorkPackage(BaseModel):
+    """Class that represents data for a work package
+    """
+
+    model_config = ConfigDict(extra='allow')
+
+    id:      int =  Field()
+    type:    str =  Field(alias='_type')
+    subject: str =  Field()
+    links:   dict = Field(alias='_links')
+    date_:      date | None = Field(None, alias='date')
+    startDate:  date | None = Field(None)
+    dueDate:    date | None = Field(None)
+
+    @property
+    def type_id(self) -> int:
+        return int(self.links['type']['href'].split('/')[-1])
+
+    @property
+    def project_id(self) -> int:
+        return int(self.links['project']['href'].split('/')[-1])
+
+    @property
+    def schema_id(self) -> tuple[int, int]:
+        return (self.project_id, self.type_id)
+
+    def __getitem__(self, key: str):
+        key = WorkPackageSchema.custom_field_name_map.get(key, key)
+        if key in self.links.keys():
+            return self.links[key]
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value):
+        key = WorkPackageSchema.custom_field_name_map.get(key, key)
+        if key in self.links.keys():
+            self.links[key] = value
+        setattr(self, key, value)
+
+    @classmethod
+    async def query_work_packages(cls, filters: Optional[dict]=None) -> list[Self]:
+        data = await com.query_work_packages(filters=filters)
+        work_packages = [cls(**obj) for obj in data['_embedded']['elements']]
+        return work_packages
+
+    def build_work_package_payload(self, schema: WorkPackageSchema) -> dict:
+        payload = self.model_dump(by_alias=True, exclude_none=True)
+        schema_data = schema.model_dump(by_alias=True)
+
+        for key, obj in schema_data.items():
+            if isinstance(obj, dict) and obj.get('writable') == False:  # noqa: E712
+                if key in payload.keys():
+                    del payload[key]
+                elif key in payload['_links'].keys():
+                    del payload['_links'][key]
+        return payload
+
+
+class WorkPackageCloneInfo(BaseModel):
+
+    template: WorkPackage
+    modifications: dict[str, Any]
+
+    async def create_clone(self) -> WorkPackage:
+        # create a copy of the template
+        clone = self.template.model_copy()
+        # apply the modifications
+        for key, val in self.modifications.items():
+            clone[key] = val
+        # get the schema to build the work package payload
+        projects = await Project.query_projects()
+        project = [p for p in projects if p.name == clone['Target Project']['title']][0]
+        schema = await WorkPackageSchema.query_work_package_schema(project.id, clone.type_id)
+        payload = clone.build_work_package_payload(schema)
+        # create the new work package
+        data = await com.create_work_package(project.id, payload)
+        new_work_package = WorkPackage(**data)
+        relation = WorkPackageRelation(**{
+            '_links': {
+                'from': {'href': f'/api/v3/work_packages/{new_work_package.id}'},
+                'to': {'href': f'/api/v3/work_packages/{self.template.id}'}
+            },
+            'name': 'duplicates',
+            'type': 'duplicates',
+            'reverseType': 'duplicated'
+        })
+        payload = relation.model_dump(by_alias=True, exclude_none=True)
+        await com.create_relation(new_work_package.id, payload)
+        return new_work_package
+
+
+# ————————————————————————— Module Methods —————————————————————————
+
+async def calculate_clone_infos():
+    # query the projects and types to compute the schemas necessary
+    projects = await Project.query_projects()
+    types = await asyncio.gather(*[p.query_work_package_types() for p in projects])
+    schema_ids = [(p.id, t.id) for p, l in zip(projects, types) for t in l]
+    schemas = await asyncio.gather(*[WorkPackageSchema.query_work_package_schema(*sid) for sid in schema_ids])
 
     # filter to schemas that have things to schedule
-    schemas = [s for s in SharedContext.work_package_schemas.values() if s.get('Auto Scheduling Algorithm')]
+    schemas = [s for s in schemas if s.get('Auto Scheduling Algorithm')]
 
-    # query work packages using project and type filters
+    # get work packages using schemas
     filters = [
         {'status_id': {'operator': 'o', 'values': None}},
         {'project_id': {'operator': '=', 'values': list({s.project_id for s in schemas})}},
         {'type': {'operator': '=', 'values': list({s.type_id for s in schemas})}}
     ]
-    templates = await common.query_work_packages(config, filters=json.dumps(filters))
-
-    return templates
+    templates = await WorkPackage.query_work_packages(filters=filters)
 
 
-async def build_clone_info(config: APIConfig, templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
-
-    clones = await asyncio.gather(
-        build_fixed_delay_clone_info(config, templates),
-        build_fixed_interval_clone_info(config, templates),
-        build_fixed_day_of_month_clone_info(config, templates)
+    data = await asyncio.gather(
+        calculate_fixed_delay_clone_infos(templates),
+        calculate_fixed_interval_clone_infos(templates),
+        calculate_fixed_day_of_month_clone_infos(templates),
+        calculate_weather_dependent_clone_infos(templates)
     )
-    clones = list(chain(*clones))
-    return clones
+    clone_infos: list[WorkPackageCloneInfo] = list(chain(*data))
+    return clone_infos
 
 
-async def build_fixed_delay_clone_info(config: APIConfig, templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
-    # filter to only fixed delay templates
-    templates: dict[int, WorkPackage] = {t.id: t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Delay'}
+async def calculate_fixed_delay_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
+    templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Delay']
 
     # short circuit evaluation
     if not templates:
@@ -69,62 +284,62 @@ async def build_fixed_delay_clone_info(config: APIConfig, templates: list[WorkPa
     # queries for duplicated so we can get the info on them
     filters = [
         {'status_id': {'operator': 'o', 'values': None}},
-        {'duplicates': {'operator': '=', 'values': list(templates.keys())}}
+        {'duplicates': {'operator': '=', 'values': [t.id for t in templates]}}
     ]
-    duplicates = await common.query_work_packages(config, filters=json.dumps(filters))
-    duplicates = {d.id: d for d in duplicates}
+    duplicates = await WorkPackage.query_work_packages(filters=filters)
 
     # query the relations so we can link duplicated to templates with short circuiting
     if not duplicates:
         relations = []
     else:
         filters = [
-            {'to': {'operator': '=', 'values': list(templates.keys())}},
-            {'from': {'operator': '=', 'values': list(duplicates.keys())}},
+            {'to': {'operator': '=', 'values': [t.id for t in templates]}},
+            {'from': {'operator': '=', 'values': [d.id for d in duplicates]}},
             {'type': {'operator': '=', 'values': ['duplicates']}}
         ]
-        relations = await common.query_work_package_relations(config, filters=json.dumps(filters))
+        relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
 
     # compute the clones from the mapping
     clones: list[WorkPackageCloneInfo] = []
     mapping = defaultdict(list)
     [mapping[r.to].append(r.from_)  for r in relations]
-    for template in templates.values():
+    for template in templates:
         if not mapping[template.id]:
             interval = template['Interval/Day Of Month']
+            dueDate = date.today() + timedelta(days=interval)
             clone = WorkPackageCloneInfo(
                 template=template,
                 modifications = {
-                    'date': date.today() + timedelta(days=interval)
+                    'date': dueDate,
+                    'startDate': dueDate,
+                    'dueDate': dueDate
                 }
             )
             clones.append(clone)
     return clones
 
 
-async def build_fixed_interval_clone_info(config: APIConfig, templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
+async def calculate_fixed_interval_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
+    templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Interval']
+
+    # short circuit evaluation
+    if not templates:
+        return []
+
+    return []
+
+async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
     return []
 
 
-async def build_fixed_day_of_month_clone_info(config: APIConfig, templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
+async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
     return []
 
 
-async def create_clone(config: APIConfig, clone_info: WorkPackageCloneInfo) -> WorkPackage:
-    clone = clone_info.template.model_copy()
-    for key, val in clone_info.modifications.items():
-        clone[key] = val
-    project = [p for p in SharedContext.projects.values() if p.name == clone['Target Project']['title']][0]
-    schema = SharedContext.work_package_schemas[(project.id, clone.type_id)]
-    new_work_package = await common.create_work_package(config, project, schema, clone)
-    relation = WorkPackageRelation(**{
-        '_links': {
-            'from': {'href': f'/api/v3/work_packages/{new_work_package.id}'},
-            'to': {'href': f'/api/v3/work_packages/{clone_info.template.id}'}
-        },
-        'name': 'duplicates',
-        'type': 'duplicates',
-        'reverseType': 'duplicated'
-    })
-    await common.create_relation(config, new_work_package.id, relation)
-    return new_work_package
+async def async_main():
+    clone_infos = await calculate_clone_infos()
+    await asyncio.gather(*[ci.create_clone() for ci in clone_infos])
+
+
+if __name__ == '__main__':
+    asyncio.run(async_main())
