@@ -4,7 +4,8 @@ from re import fullmatch
 from itertools import chain
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Self, ClassVar, Any, Optional, Any
+from dateutil.relativedelta import relativedelta
+from typing import Self, ClassVar, Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 import common as com
 
@@ -114,7 +115,7 @@ class WorkPackageSchema(BaseModel):
         key = self.custom_field_name_map.get(key, key)
         return getattr(self, key)
 
-    def get(self, key: str, fallback=None):
+    def get(self, key: str, fallback: Any=None) -> Any:
         key = self.custom_field_name_map.get(key, key)
         return getattr(self, key, fallback)
 
@@ -151,6 +152,9 @@ class WorkPackageRelation(BaseModel):
         data = await com.query_work_package_relations(filters=filters)
         relations = [cls(**obj) for obj in data['_embedded']['elements']]
         return relations
+
+    def build_work_package_relation_payload(self) -> dict:
+        return self.model_dump(by_alias=True, exclude_none=True)
 
 
 class WorkPackage(BaseModel):
@@ -191,6 +195,12 @@ class WorkPackage(BaseModel):
             self.links[key] = value
         setattr(self, key, value)
 
+    def get(self, key: str, fallback: Any=None) -> Any:
+        key = WorkPackageSchema.custom_field_name_map.get(key, key)
+        if key in self.links.keys():
+            return self.links[key]
+        return getattr(self, key, fallback)
+
     @classmethod
     async def query_work_packages(cls, filters: Optional[dict]=None) -> list[Self]:
         data = await com.query_work_packages(filters=filters)
@@ -200,7 +210,6 @@ class WorkPackage(BaseModel):
     def build_work_package_payload(self, schema: WorkPackageSchema) -> dict:
         payload = self.model_dump(by_alias=True, exclude_none=True)
         schema_data = schema.model_dump(by_alias=True)
-
         for key, obj in schema_data.items():
             if isinstance(obj, dict) and obj.get('writable') == False:  # noqa: E712
                 if key in payload.keys():
@@ -238,7 +247,7 @@ class WorkPackageCloneInfo(BaseModel):
             'type': 'duplicates',
             'reverseType': 'duplicated'
         })
-        payload = relation.model_dump(by_alias=True, exclude_none=True)
+        payload = relation.build_work_package_relation_payload()
         await com.create_relation(new_work_package.id, payload)
         return new_work_package
 
@@ -326,10 +335,128 @@ async def calculate_fixed_interval_clone_infos(templates: list[WorkPackage]) -> 
     if not templates:
         return []
 
-    return []
+    # calculate next occurrence date
+    dates = {}
+    for t in templates:
+        try:
+            start = t['startDate'] or t['date_']
+            today = date.today()
+            delta: timedelta = today - start
+            interval = t['Interval/Day Of Month']
+            remainder = timedelta(days = interval - (delta.days % interval))
+            next_date = start + delta + remainder
+            dates[t.id] = next_date
+        except (TypeError, ValueError) as e:
+            LOGGER.warning(f'Invalid recurring config for work package {t.id} with error {e}')
+
+    if not dates:
+        duplicates = []
+    else:
+        # queries for duplicated so we can get the info on them
+        filters = [
+            # {'status_id': {'operator': 'o', 'values': None}},
+            {'duplicates': {'operator': '=', 'values': [t.id for t in templates]}},
+            {'startDate': {'operator': '=d', 'values': [str(d) for d in dates.values()]}}
+        ]
+        duplicates = await WorkPackage.query_work_packages(filters=filters)
+
+
+    # query the relations so we can link duplicated to templates with short circuiting
+    if not duplicates:
+        relations = []
+    else:
+        filters = [
+            {'to': {'operator': '=', 'values': [t.id for t in templates]}},
+            {'from': {'operator': '=', 'values': [d.id for d in duplicates]}},
+            {'type': {'operator': '=', 'values': ['duplicates']}}
+        ]
+        relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
+
+    # compute the clones from the mapping
+    clones: list[WorkPackageCloneInfo] = []
+    mapping = defaultdict(list)
+    [mapping[r.to].append(r.from_)  for r in relations]
+    for template in templates:
+        if not mapping[template.id]:
+            try:
+                dueDate = dates[template.id]
+                clone = WorkPackageCloneInfo(
+                    template=template,
+                    modifications = {
+                        'date': dueDate,
+                        'startDate': dueDate,
+                        'dueDate': dueDate
+                    }
+                )
+                clones.append(clone)
+            except KeyError as e:
+                LOGGER.warning(f'Failed to create clone info for work package {template.id} with error {e}')
+    return clones
+
 
 async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
-    return []
+    templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Day Of Month']
+
+    # short circuit evaluation
+    if not templates:
+        return []
+
+    # calculate next occurrence date
+    dates = {}
+    for t in templates:
+        try:
+            today = date.today()
+            day = t['Interval/Day Of Month']
+            # if day is in the past look to next months
+            next_date = today.replace(day = day)
+            if next_date <= today:
+                next_date = next_date + relativedelta(months=1)
+            dates[t.id] = next_date
+        except (TypeError, ValueError) as e:
+            LOGGER.warning(f'Invalid recurring config for work package {t.id} with error {e}')
+
+    if not dates:
+        duplicates = []
+    else:
+        # queries for duplicated so we can get the info on them
+        filters = [
+            # {'status_id': {'operator': 'o', 'values': None}},
+            {'duplicates': {'operator': '=', 'values': [t.id for t in templates]}},
+            {'startDate': {'operator': '=d', 'values': [str(d) for d in dates.values()]}}
+        ]
+        duplicates = await WorkPackage.query_work_packages(filters=filters)
+
+    # query the relations so we can link duplicated to templates with short circuiting
+    if not duplicates:
+        relations = []
+    else:
+        filters = [
+            {'to': {'operator': '=', 'values': [t.id for t in templates]}},
+            {'from': {'operator': '=', 'values': [d.id for d in duplicates]}},
+            {'type': {'operator': '=', 'values': ['duplicates']}}
+        ]
+        relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
+
+    # compute the clones from the mapping
+    clones: list[WorkPackageCloneInfo] = []
+    mapping = defaultdict(list)
+    [mapping[r.to].append(r.from_)  for r in relations]
+    for template in templates:
+        if not mapping[template.id]:
+            try:
+                dueDate = dates[template.id]
+                clone = WorkPackageCloneInfo(
+                    template=template,
+                    modifications = {
+                        'date': dueDate,
+                        'startDate': dueDate,
+                        'dueDate': dueDate
+                    }
+                )
+                clones.append(clone)
+            except KeyError as e:
+                LOGGER.warning(f'Failed to create clone info for work package {template.id} with error {e}')
+    return clones
 
 
 async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:

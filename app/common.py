@@ -2,7 +2,6 @@ import json
 import asyncio
 import aiohttp
 import logging
-import time
 from os import environ
 from base64 import b64encode
 from typing import ClassVar, Self, Optional
@@ -181,3 +180,4 @@ async def create_relation(work_package_id: int, payload: dict, config: APIConfig
         async with session.post(url, data=payload, headers=headers) as response:
             data: dict = await response.json()
             return data
+
