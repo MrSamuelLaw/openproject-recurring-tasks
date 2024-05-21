@@ -1,5 +1,3 @@
-SHELL=/usr/bin/sh
-
 # Notice that tasks will be started based on the cron's system
 # daemon's notion of time and timezones.
 #
