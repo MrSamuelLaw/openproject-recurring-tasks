@@ -1,5 +1,4 @@
 import json
-import asyncio
 import aiohttp
 import logging
 from os import environ
@@ -11,7 +10,9 @@ from pydantic import BaseModel, Field, ConfigDict
 # ————————————————————————— Module Scoped Variables —————————————————————————
 
 logging.basicConfig(level=logging.INFO)
+
 LOGGER = logging.getLogger(__name__)
+MAX_PAGE_SIZE = 1000
 
 
 # ————————————————————————— Models —————————————————————————
@@ -109,7 +110,7 @@ async def query_work_package_schema(project_id: int, work_package_type_id: int, 
             return data
 
 
-async def query_work_packages(offset: int=1, page_size: int=1000, filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
+async def query_work_packages(offset: int=1, page_size: int=MAX_PAGE_SIZE, filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
     """Returns a list of work packages using the filters provided.
     Results are limited to the page_size specified.
     """
@@ -128,22 +129,36 @@ async def query_work_packages(offset: int=1, page_size: int=1000, filters: Optio
             params['filters'] = filters if isinstance(filters, str) else json.dumps(filters)
         async with session.get(url, headers=headers, params=params) as response:
             data: dict = await response.json()
+            # recursively call until all data is loaded in
+            if offset * page_size < data['total']:
+                more_data = await query_work_packages(offset=offset+1, page_size=page_size, filters=filters, config=config)
+                data['_embedded']['elements'].extend(more_data['_embedded']['elements'])
+                data['count'] = data['count'] + more_data['count']
             return data
 
 
-async def query_work_package_relations(filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
+async def query_work_package_relations(offset: int=1, page_size: int=MAX_PAGE_SIZE, filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/relations')
+        url = build_url(config, 'api/v3/relations')
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/json',
             'Authorization': f'Basic {config.api_token}',
         }
-        params = {}
+        params = {
+            'offset': offset,
+            'pageSize': page_size
+        }
         if filters is not None:
             params['filters'] = filters if isinstance(filters, str) else json.dumps(filters)
         async with session.get(url, headers=headers, params=params) as response:
             data: dict = await response.json()
+            # recursively call until all data is loaded in
+            if offset * page_size < data['total']:
+                more_data = await query_work_packages(offset=offset+1, page_size=page_size, filters=filters, config=config)
+                data['_embedded']['elements'].extend(more_data['_embedded']['elements'])
+                data['count'] = data['count'] + more_data['count']
+            return data
             return data
 
 
@@ -180,4 +195,3 @@ async def create_relation(work_package_id: int, payload: dict, config: APIConfig
         async with session.post(url, data=payload, headers=headers) as response:
             data: dict = await response.json()
             return data
-

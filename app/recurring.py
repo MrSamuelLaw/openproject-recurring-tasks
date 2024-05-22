@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import common as com
 
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -258,7 +258,7 @@ async def calculate_clone_infos():
     # query the projects and types to compute the schemas necessary
     projects = await Project.query_projects()
     types = await asyncio.gather(*[p.query_work_package_types() for p in projects])
-    schema_ids = [(p.id, t.id) for p, l in zip(projects, types) for t in l]
+    schema_ids = [(p.id, t.id) for p, lst in zip(projects, types) for t in lst]
     schemas = await asyncio.gather(*[WorkPackageSchema.query_work_package_schema(*sid) for sid in schema_ids])
 
     # filter to schemas that have things to schedule
@@ -464,7 +464,10 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
 
 
 async def async_main():
+    LOGGER.info('Calculating clone infos...')
     clone_infos = await calculate_clone_infos()
+
+    LOGGER.info(f'Creating {len(clone_infos)} new work packages')
     await asyncio.gather(*[ci.create_clone() for ci in clone_infos])
 
 
