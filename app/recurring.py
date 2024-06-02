@@ -10,9 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 import common as com
 
 
-logging.basicConfig(level=logging.INFO)
-LOGGER = logging.getLogger(__name__)
-
 
 # ————————————————————————— Decorators —————————————————————————
 
@@ -221,10 +218,11 @@ class WorkPackage(BaseModel):
 
 class WorkPackageCloneInfo(BaseModel):
 
-    template: WorkPackage
-    modifications: dict[str, Any]
+    template: WorkPackage =         Field()
+    modifications: dict[str, Any] = Field()
 
     async def create_clone(self) -> WorkPackage:
+        logging.debug(f'creating clone from work package {self.template.id}')
         # create a copy of the template
         clone = self.template.model_copy()
         # apply the modifications
@@ -252,9 +250,28 @@ class WorkPackageCloneInfo(BaseModel):
         return new_work_package
 
 
+class WorkPackageTemplateInfo(BaseModel):
+
+    template: WorkPackage =             Field()
+    modifications: dict[str, Any] =     Field()
+
+    async def update_template(self, notify: bool=True) -> WorkPackage:
+        self.modifications['lockVersion'] = self.template.lockVersion
+        logging.debug(f'updating template {self.template.id} with modifications {self.modifications}')
+        data = await com.update_work_package(self.template.id, self.modifications, notify)
+        work_package = WorkPackage(**data)
+        return work_package
+
+
+class WorkPackageSchedulingInfo(BaseModel):
+
+    clone_info: Optional[WorkPackageCloneInfo] =        Field(None)
+    template_info: Optional[WorkPackageTemplateInfo] =  Field(None)
+
+
 # ————————————————————————— Module Methods —————————————————————————
 
-async def calculate_clone_infos():
+async def calculate_scheduling_infos() -> list[WorkPackageSchedulingInfo]:
     # query the projects and types to compute the schemas necessary
     projects = await Project.query_projects()
     types = await asyncio.gather(*[p.query_work_package_types() for p in projects])
@@ -274,18 +291,19 @@ async def calculate_clone_infos():
 
 
     data = await asyncio.gather(
-        calculate_fixed_delay_clone_infos(templates),
-        calculate_fixed_interval_clone_infos(templates),
+        calculate_fixed_delay_scheduling_infos(templates),
+        calculate_fixed_interval_scheduling_infos(templates),
         calculate_fixed_day_of_month_clone_infos(templates),
         calculate_weather_dependent_clone_infos(templates)
     )
-    clone_infos: list[WorkPackageCloneInfo] = list(chain(*data))
-    return clone_infos
+    scheduling_infos: list[WorkPackageSchedulingInfo] = list(chain(*data))
+    return scheduling_infos
 
 
-async def calculate_fixed_delay_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
+async def calculate_fixed_delay_scheduling_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
     templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Delay']
 
+    logging.debug(f'{len(templates)} fixed delay schedule templates found')
     # short circuit evaluation
     if not templates:
         return []
@@ -309,14 +327,14 @@ async def calculate_fixed_delay_clone_infos(templates: list[WorkPackage]) -> lis
         relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
 
     # compute the clones from the mapping
-    clones: list[WorkPackageCloneInfo] = []
+    scheduling_infos: list[WorkPackageSchedulingInfo] = []
     mapping = defaultdict(list)
     [mapping[r.to].append(r.from_)  for r in relations]
     for template in templates:
         if not mapping[template.id]:
             interval = template['Interval/Day Of Month']
             dueDate = date.today() + timedelta(days=interval)
-            clone = WorkPackageCloneInfo(
+            clone_info = WorkPackageCloneInfo(
                 template=template,
                 modifications = {
                     'date': dueDate,
@@ -324,14 +342,18 @@ async def calculate_fixed_delay_clone_infos(templates: list[WorkPackage]) -> lis
                     'dueDate': dueDate
                 }
             )
-            clones.append(clone)
-    return clones
+            schedule_info = WorkPackageSchedulingInfo(clone_info=clone_info)
+            scheduling_infos.append(schedule_info)
+
+    logging.debug(f'{len(scheduling_infos)} fixed delay scheduling_infos calculated')
+    return scheduling_infos
 
 
-async def calculate_fixed_interval_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
+async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
     templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Interval']
 
     # short circuit evaluation
+    logging.debug(f'{len(templates)} fixed interval schedule templates found')
     if not templates:
         return []
 
@@ -347,7 +369,7 @@ async def calculate_fixed_interval_clone_infos(templates: list[WorkPackage]) -> 
             next_date = start + delta + remainder
             dates[t.id] = next_date
         except (TypeError, ValueError) as e:
-            LOGGER.warning(f'Invalid recurring config for work package {t.id} with error {e}')
+            logging.warning(f'Invalid recurring config for work package {t.id} with error {e}')
 
     if not dates:
         duplicates = []
@@ -373,14 +395,14 @@ async def calculate_fixed_interval_clone_infos(templates: list[WorkPackage]) -> 
         relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
 
     # compute the clones from the mapping
-    clones: list[WorkPackageCloneInfo] = []
+    scheduling_infos: list[WorkPackageSchedulingInfo] = []
     mapping = defaultdict(list)
     [mapping[r.to].append(r.from_)  for r in relations]
     for template in templates:
         if not mapping[template.id]:
             try:
                 dueDate = dates[template.id]
-                clone = WorkPackageCloneInfo(
+                clone_info = WorkPackageCloneInfo(
                     template=template,
                     modifications = {
                         'date': dueDate,
@@ -388,16 +410,20 @@ async def calculate_fixed_interval_clone_infos(templates: list[WorkPackage]) -> 
                         'dueDate': dueDate
                     }
                 )
-                clones.append(clone)
+                scheduling_info = WorkPackageSchedulingInfo(clone_info=clone_info)
+                scheduling_infos.append(scheduling_info)
             except KeyError as e:
-                LOGGER.warning(f'Failed to create clone info for work package {template.id} with error {e}')
-    return clones
+                logging.warning(f'Failed to create clone info for work package {template.id} with error {e}')
+
+    logging.debug(f'{len(scheduling_infos)} fixed interval scheduling_infos calculated')
+    return scheduling_infos
 
 
-async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
+async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
     templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Day Of Month']
 
     # short circuit evaluation
+    logging.debug(f'{len(templates)} fixed day of month schedule templates found')
     if not templates:
         return []
 
@@ -413,7 +439,7 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
                 next_date = next_date + relativedelta(months=1)
             dates[t.id] = next_date
         except (TypeError, ValueError) as e:
-            LOGGER.warning(f'Invalid recurring config for work package {t.id} with error {e}')
+            logging.warning(f'Invalid recurring config for work package {t.id} with error {e}')
 
     if not dates:
         duplicates = []
@@ -438,14 +464,14 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
         relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
 
     # compute the clones from the mapping
-    clones: list[WorkPackageCloneInfo] = []
+    scheduling_infos: list[WorkPackageSchedulingInfo] = []
     mapping = defaultdict(list)
     [mapping[r.to].append(r.from_)  for r in relations]
     for template in templates:
         if not mapping[template.id]:
             try:
                 dueDate = dates[template.id]
-                clone = WorkPackageCloneInfo(
+                clone_info = WorkPackageCloneInfo(
                     template=template,
                     modifications = {
                         'date': dueDate,
@@ -453,23 +479,97 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
                         'dueDate': dueDate
                     }
                 )
-                clones.append(clone)
+                scheduling_info = WorkPackageSchedulingInfo(clone_info=clone_info)
+                scheduling_infos.append(scheduling_info)
             except KeyError as e:
-                LOGGER.warning(f'Failed to create clone info for work package {template.id} with error {e}')
-    return clones
+                logging.warning(f'Failed to create clone info for work package {template.id} with error {e}')
+
+    logging.debug(f'{len(scheduling_infos)} fixed day of month scheduling_infos calculated')
+    return scheduling_infos
 
 
-async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageCloneInfo]:
-    return []
+async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
+    templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Weather Forecast']
+
+    # short circuit evaluation
+    logging.debug(f'{len(templates)} weather dependent scheduling templates found')
+    if not templates:
+        return []
+
+    # get the number of days to query weather for
+    num_days = max((t['Interval/Day Of Month'] for t in templates))
+    weather_data = await com.query_forecast(num_days)
+    forecast_codes = weather_data['minutely_15']['weather_code']
+
+    def forecast_codes_in_work_package(forecast_codes: int | tuple[int, int], template: WorkPackage):
+        """Checks if the forecast weather codes intersect with the templates
+        weather codes and returns true if so.
+        """
+        days_out = template['Interval/Day Of Month']
+        idx = days_out * 24 * 4 # days out * hours in a day * quarters in an hour
+        idx = min((idx, len(forecast_codes)))
+        codes = set(forecast_codes[: idx])
+        t_codes = template['Weather Codes'].split(',')
+        t_codes = [c.strip() for c in t_codes]
+        for tc in t_codes:
+            if '-' in tc:
+                start, end = [int(v) for v in tc.split('-')]
+                if any([v for v in codes if start <= v <= end]):
+                    return True
+            else:
+                tc = int(tc)
+                if any([v for v in codes if tc == v]):
+                    return True
+        return False
+
+    # create new clones when codes in forecast goes from false to true
+    scheduling_infos = []
+    fieldName = 'Weather Detected Status'
+    for t in templates:
+        scheduling_info = WorkPackageSchedulingInfo()
+        previously_detected = t[fieldName]
+        currently_detected = forecast_codes_in_work_package(forecast_codes, t)
+        if currently_detected and (not previously_detected):
+            dueDate = date.today()
+            clone_info = WorkPackageCloneInfo(
+                template=t,
+                modifications = {
+                    'date': dueDate,
+                    'startDate': dueDate,
+                    'dueDate': dueDate
+                }
+            )
+            scheduling_info.clone_info = clone_info
+        if currently_detected != previously_detected:
+            customFieldId = WorkPackageSchema.custom_field_name_map[fieldName]
+            modifications = {
+                customFieldId: currently_detected
+            }
+            update_info = WorkPackageTemplateInfo(
+                template=t,
+                modifications=modifications
+            )
+            scheduling_info.template_info = update_info
+            scheduling_infos.append(scheduling_info)
+
+    logging.debug(f'{len(scheduling_infos)} weather dependent scheduling_infos calculated')
+    return scheduling_infos
 
 
 async def async_main():
-    LOGGER.info('Calculating clone infos...')
-    clone_infos = await calculate_clone_infos()
+    logging.info('Calculating scheduling infos...')
+    scheduling_infos = await calculate_scheduling_infos()
 
-    LOGGER.info(f'Creating {len(clone_infos)} new work packages')
+    clone_infos = [si.clone_info for si in scheduling_infos if si.clone_info is not None]
+    logging.info(f'Creating {len(clone_infos)} new work packages')
     await asyncio.gather(*[ci.create_clone() for ci in clone_infos])
+
+    template_infos = [si.template_info for si in scheduling_infos if si.template_info is not None]
+    logging.info(f'Update {len(template_infos)} template work packages')
+    await asyncio.gather(*[ti.update_template() for ti in template_infos])
 
 
 if __name__ == '__main__':
+    config = com.APIConfig.from_env()
+    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=config.log_level)
     asyncio.run(async_main())

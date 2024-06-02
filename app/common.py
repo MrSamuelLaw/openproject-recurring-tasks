@@ -8,10 +8,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 # ————————————————————————— Module Scoped Variables —————————————————————————
-
-logging.basicConfig(level=logging.INFO)
-
-LOGGER = logging.getLogger(__name__)
+LOGGER = logging.getLogger()
 MAX_PAGE_SIZE = 1000
 
 
@@ -29,7 +26,11 @@ class APIConfig(BaseModel):
     host:       str  = Field()
     https:      bool = Field(True)
     verify_ssl: bool = Field(True)
-    port:       Optional[int]  = Field(None)
+    log_level:  Optional[int]   =   Field()
+    port:       Optional[int]  =    Field(None)
+    latitude:   Optional[float] =   Field(None)
+    longitude:  Optional[float] =   Field(None)
+
 
     @classmethod
     def from_env(cls) -> Self:
@@ -40,6 +41,8 @@ class APIConfig(BaseModel):
         """
         if cls._instance is None:
             data = {key: environ.get(key.upper()) for key in cls.model_fields.keys()}
+            data = {key: value for key, value in data.items() if value is not None}
+            data['log_level'] = getattr(logging, data.get('log_level') or 'WARNING')
             cls._instance = cls(**data)
         return cls._instance
 
@@ -54,19 +57,41 @@ class APIConfig(BaseModel):
 
 # ————————————————————————— Functions —————————————————————————
 
-def build_url(config: APIConfig, endpoint: str) -> str:
+def build_url(endpoint: str, config: APIConfig=APIConfig.from_env()) -> str:
     """Returns a url for the endpoint using the apps configs.
     """
     prefix = 'https' if config.https else 'http'
-    url = f'{prefix}://{config.host}/{endpoint}'
+    port = f':{config.port}' if config.port else ''
+    url = f'{prefix}://{config.host}{port}/{endpoint}'
     return url
+
+
+async def query_forecast(num_days: int, config: APIConfig=APIConfig.from_env()):
+    """Queries the forecast for the weather codes in 15 minute increments using the
+    open-meteo api. The weather codes can then be used to generate work packages
+    based on weather events.
+    """
+    if not (0 <= num_days <= 16):
+        raise ValueError(f'num_days must be between 0 and 16 inclusive. Actual value = {num_days}')
+
+    async with aiohttp.ClientSession() as session:
+        url = 'https://api.open-meteo.com/v1/forecast'
+        params = {
+            'latitude': config.latitude,
+            'longitude': config.longitude,
+            'forecast_days': num_days,
+            'minutely_15': 'weather_code'
+        }
+        async with session.get(url, params=params) as response:
+            data: dict = await response.json()
+            return data
 
 
 async def query_projects(filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
     """Returns a list of projects using the filters provided
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, 'api/v3/projects')
+        url = build_url('api/v3/projects', config)
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
@@ -82,7 +107,7 @@ async def query_projects(filters: Optional[dict]=None, config: APIConfig=APIConf
 
 async def query_work_package_types(project_id: int, config: APIConfig=APIConfig.from_env()) -> dict:
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/projects/{project_id}/types')
+        url = build_url(f'api/v3/projects/{project_id}/types', config)
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
@@ -99,7 +124,7 @@ async def query_work_package_schema(project_id: int, work_package_type_id: int, 
     also has the side effect of updating the WorkPackage model field map
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/work_packages/schemas/{project_id}-{work_package_type_id}')
+        url = build_url(f'api/v3/work_packages/schemas/{project_id}-{work_package_type_id}', config)
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
@@ -115,7 +140,7 @@ async def query_work_packages(offset: int=1, page_size: int=MAX_PAGE_SIZE, filte
     Results are limited to the page_size specified.
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, 'api/v3/work_packages')
+        url = build_url('api/v3/work_packages', config)
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/hal+json',
@@ -139,7 +164,7 @@ async def query_work_packages(offset: int=1, page_size: int=MAX_PAGE_SIZE, filte
 
 async def query_work_package_relations(offset: int=1, page_size: int=MAX_PAGE_SIZE, filters: Optional[dict]=None, config: APIConfig=APIConfig.from_env()) -> dict:
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, 'api/v3/relations')
+        url = build_url('api/v3/relations', config)
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/json',
@@ -155,7 +180,7 @@ async def query_work_package_relations(offset: int=1, page_size: int=MAX_PAGE_SI
             data: dict = await response.json()
             # recursively call until all data is loaded in
             if offset * page_size < data['total']:
-                more_data = await query_work_packages(offset=offset+1, page_size=page_size, filters=filters, config=config)
+                more_data = await query_work_package_relations(offset=offset+1, page_size=page_size, filters=filters, config=config)
                 data['_embedded']['elements'].extend(more_data['_embedded']['elements'])
                 data['count'] = data['count'] + more_data['count']
             return data
@@ -166,7 +191,7 @@ async def create_work_package(project_id: int, payload: dict, notify: bool=True,
     """Creates a work package in the given project and returns the newly created work package
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/projects/{project_id}/work_packages')
+        url = build_url(f'api/v3/projects/{project_id}/work_packages', config)
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/json',
@@ -185,7 +210,7 @@ async def create_relation(work_package_id: int, payload: dict, config: APIConfig
     """Creates a relation between two work packages
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
-        url = build_url(config, f'api/v3/work_packages/{work_package_id}/relations')
+        url = build_url(f'api/v3/work_packages/{work_package_id}/relations', config)
         headers = {
             'Accept': 'application/hal+json',
             'Content-Type': 'application/json',
@@ -193,5 +218,24 @@ async def create_relation(work_package_id: int, payload: dict, config: APIConfig
         }
         payload = json.dumps(payload, default=str)
         async with session.post(url, data=payload, headers=headers) as response:
+            data: dict = await response.json()
+            return data
+
+
+async def update_work_package(work_package_id: int, payload: dict, notify: bool=True, config: APIConfig=APIConfig.from_env()) -> dict:
+    """Updates the attributes defined in payload for the work package with the id = work_package_id
+    """
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
+        url = build_url(f'api/v3/work_packages/{work_package_id}', config)
+        headers = {
+            'Accept': 'application/hal+json',
+            'Content-Type': 'application/json',
+            'Authorization': f'Basic {config.api_token}',
+        }
+        params = {
+            'notify': int(notify)
+        }
+        payload = json.dumps(payload, default=str)
+        async with session.patch(url, data=payload, headers=headers, params=params) as response:
             data: dict = await response.json()
             return data
