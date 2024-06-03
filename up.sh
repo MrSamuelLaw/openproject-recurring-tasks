@@ -16,7 +16,6 @@ docker build -t openproject-automation-scripts .
 # --mount, bind moount local app dir to the containers app dir
 # --env-file, used to inject parameters and api key into the container
 docker run \
-    -p 8022:22 \
     -it \
     -d \
     --rm \

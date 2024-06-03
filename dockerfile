@@ -3,13 +3,6 @@ FROM python:3.12-slim
 # update and upgrade
 RUN apt update && apt upgrade -y
 
-# uncomment to get ssh server running on the container
-# RUN apt install -y openssh-server -y
-# RUN mkdir /var/run/sshd
-# RUN echo 'root:root' | chpasswd
-# RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-# EXPOSE 22
-
 # copy the app into the root dir of the container
 COPY ./app /app
 RUN pip install -r /app/requirements.txt

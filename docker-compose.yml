@@ -1,0 +1,9 @@
+services:
+  openproject-automation-scripts:
+    build: .
+    image: openproject-automation-scriptsclear
+    container_name: openproject-automation-scripts
+    volumes:
+      - type: bind
+        source: ./app
+        target: /app
