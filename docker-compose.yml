@@ -1,8 +1,10 @@
 services:
   openproject-automation-scripts:
     build: .
-    image: openproject-automation-scriptsclear
+    image: openproject-automation-scripts
     container_name: openproject-automation-scripts
+    env_file:
+      - path: .env
     volumes:
       - type: bind
         source: ./app
