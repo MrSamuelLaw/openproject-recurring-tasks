@@ -13,6 +13,11 @@ Weather event fields are required for creating work packages based on weather ev
 
 Screen shots of each field are shown for convenience.
 
+Once the fields are created, rename the file .env.example to .env and edit the entries match your setup, then run
+```
+    docker compose up -d
+```
+to start the container. Note that valid latitude and longitude values are only required if using the Weather Forecast algorithm.
 
 ## Template Work Package Examples
 Once the custom fields are in place and activated in the project that will house the template work packages. Creating a recurring work package is as easy as creating a new work package and filling out the fields.  
