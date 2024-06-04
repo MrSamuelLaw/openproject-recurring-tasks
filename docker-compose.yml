@@ -1,8 +1,8 @@
 services:
-  openproject-automation-scripts:
+  openproject-recurring-tasks:
     build: .
-    image: openproject-automation-scripts
-    container_name: openproject-automation-scripts
+    image: openproject-recurring-tasks
+    container_name: openproject-recurring-tasks
     env_file:
       - path: .env
     volumes:
