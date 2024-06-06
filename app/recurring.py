@@ -350,7 +350,7 @@ async def calculate_fixed_delay_scheduling_infos(templates: list[WorkPackage]) -
 
 
 async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
-    templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Interval']
+    templates = {t.id: t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Interval'}
 
     # short circuit evaluation
     logging.debug(f'{len(templates)} fixed interval schedule templates found')
@@ -359,7 +359,7 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
 
     # calculate next occurrence date
     dates = {}
-    for t in templates:
+    for t in templates.values():
         try:
             start = t['startDate'] or t['date_']
             today = date.today()
@@ -375,12 +375,9 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
         duplicates = []
     else:
         # queries for duplicated so we can get the info on them
-        filters = [
-            # {'status_id': {'operator': 'o', 'values': None}},
-            {'duplicates': {'operator': '=', 'values': [t.id for t in templates]}},
-            {'startDate': {'operator': '=d', 'values': [str(d) for d in dates.values()]}}
-        ]
+        filters = [{'duplicates': {'operator': '=', 'values': list(templates.keys())}}]
         duplicates = await WorkPackage.query_work_packages(filters=filters)
+        duplicates = {d.id: d for d in duplicates if (d.startDate or d.dueDate or d.date_) in dates.values()}
 
 
     # query the relations so we can link duplicated to templates with short circuiting
@@ -388,8 +385,8 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
         relations = []
     else:
         filters = [
-            {'to': {'operator': '=', 'values': [t.id for t in templates]}},
-            {'from': {'operator': '=', 'values': [d.id for d in duplicates]}},
+            {'to': {'operator': '=', 'values': list(templates.keys())}},
+            {'from': {'operator': '=', 'values': list(duplicates.keys())}},
             {'type': {'operator': '=', 'values': ['duplicates']}}
         ]
         relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
@@ -397,8 +394,11 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
     # compute the clones from the mapping
     scheduling_infos: list[WorkPackageSchedulingInfo] = []
     mapping = defaultdict(list)
-    [mapping[r.to].append(r.from_)  for r in relations]
-    for template in templates:
+    for r in relations:
+        d = duplicates[r.from_]
+        if (d.startDate or d.dueDate or d.date_) == dates[r.to]:
+            mapping[r.to].append(r.from_)
+    for template in templates.values():
         if not mapping[template.id]:
             try:
                 dueDate = dates[template.id]
@@ -420,7 +420,7 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
 
 
 async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
-    templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Day Of Month']
+    templates = {t.id: t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Day Of Month'}
 
     # short circuit evaluation
     logging.debug(f'{len(templates)} fixed day of month schedule templates found')
@@ -429,7 +429,7 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
 
     # calculate next occurrence date
     dates = {}
-    for t in templates:
+    for t in templates.values():
         try:
             today = date.today()
             day = t['Interval/Day Of Month']
@@ -445,20 +445,18 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
         duplicates = []
     else:
         # queries for duplicated so we can get the info on them
-        filters = [
-            # {'status_id': {'operator': 'o', 'values': None}},
-            {'duplicates': {'operator': '=', 'values': [t.id for t in templates]}},
-            {'startDate': {'operator': '=d', 'values': [str(d) for d in dates.values()]}}
-        ]
+        filters = [{'duplicates': {'operator': '=', 'values': list(templates.keys())}}]
         duplicates = await WorkPackage.query_work_packages(filters=filters)
+        duplicates = {d.id: d for d in duplicates if (d.startDate or d.dueDate or d.date_) in dates.values()}
+
 
     # query the relations so we can link duplicated to templates with short circuiting
     if not duplicates:
         relations = []
     else:
         filters = [
-            {'to': {'operator': '=', 'values': [t.id for t in templates]}},
-            {'from': {'operator': '=', 'values': [d.id for d in duplicates]}},
+            {'to': {'operator': '=', 'values': list(templates.keys())}},
+            {'from': {'operator': '=', 'values': list(duplicates.keys())}},
             {'type': {'operator': '=', 'values': ['duplicates']}}
         ]
         relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
@@ -466,8 +464,11 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
     # compute the clones from the mapping
     scheduling_infos: list[WorkPackageSchedulingInfo] = []
     mapping = defaultdict(list)
-    [mapping[r.to].append(r.from_)  for r in relations]
-    for template in templates:
+    for r in relations:
+        d = duplicates[r.from_]
+        if (d.startDate or d.dueDate or d.date_) == dates[r.to]:
+            mapping[r.to].append(r.from_)
+    for template in templates.values():
         if not mapping[template.id]:
             try:
                 dueDate = dates[template.id]
