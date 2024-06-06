@@ -1,11 +1,11 @@
 # stop and remove the running container if it exists.
-docker stop openproject-automation-scripts && rm openproject-automation-scripts
+docker stop openproject-recurring-tasks && rm openproject-recurring-tasks
 
 # remove the image if it exists.
-docker image rm openproject-automation-scripts
+docker image rm openproject-recurring-tasks
 
 # rebuild the image fresh.
-docker build -t openproject-automation-scripts .
+docker build -t openproject-recurring-tasks .
 
 # run the command with:
 # -p 8022:22 port 22 (ssh port) mapped to host.
@@ -19,7 +19,7 @@ docker run \
     -it \
     -d \
     --rm \
-    --name openproject-automation-scripts \
+    --name openproject-recurring-tasks \
     --mount "type=bind,source=$(pwd)/app,target=/app" \
     --env-file "$(pwd)/.env" \
-    openproject-automation-scripts
+    openproject-recurring-tasks
