@@ -12,4 +12,4 @@
 #
 # m h  dom mon dow   command
 # use the 2>&1 to pip the output to the console;
-*/15 * * * * /usr/local/bin/python /app/recurring.py >> /var/log/cronlog 2>&1
+*/20 * * * * /usr/local/bin/python /app/recurring.py >> /var/log/cronlog 2>&1
