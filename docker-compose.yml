@@ -3,8 +3,7 @@ services:
     build: .
     image: openproject-recurring-tasks
     container_name: openproject-recurring-tasks
-    env_file:
-      - path: .env
+    env_file: ".env"
     environment:
       - TZ='America/Chicago'
     volumes:

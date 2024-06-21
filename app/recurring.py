@@ -512,16 +512,21 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
         codes = set(forecast_codes[: idx])
         t_codes = template['Weather Codes'].split(',')
         t_codes = [c.strip() for c in t_codes]
+        flag = False
         for tc in t_codes:
             if '-' in tc:
-                start, end = [int(v) for v in tc.split('-')]
-                if any([v for v in codes if start <= v <= end]):
-                    return True
+                left, right = [int(v) for v in tc.split('-')]
+                codes = [v for v in codes if left <= v <= right]
+                if codes:
+                    logging.debug(f'Matched the codes {codes} in expresion {tc}')
+                    flag = True
             else:
                 tc = int(tc)
-                if any([v for v in codes if tc == v]):
-                    return True
-        return False
+                codes = [v for v in codes if tc == v]
+                if codes:
+                    logging.debug(f'Matched the codes {codes} in expresion {tc}')
+                    flag = True
+        return flag
 
     # create new clones when codes in forecast goes from false to true
     scheduling_infos = []
