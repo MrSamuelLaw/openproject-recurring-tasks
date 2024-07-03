@@ -1,3 +1,4 @@
+import sys
 import logging
 import asyncio
 from re import fullmatch
@@ -8,6 +9,8 @@ from dateutil.relativedelta import relativedelta
 from typing import Self, ClassVar, Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 import common as com
+
+
 
 
 
@@ -576,6 +579,24 @@ async def async_main():
 
 
 if __name__ == '__main__':
+    # load in configs
     config = com.APIConfig.from_env()
-    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=config.log_level)
+    # setup the handlers
+    console_handler = logging.StreamHandler(stream=sys.stdout)
+    file_handler = logging.FileHandler('/app/logs/app.log')
+    # format the logs
+    format = '%(asctime)s - %(levelname)s - %(message)s'
+    formatter = logging.Formatter(format)
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    # set the log levels
+    console_handler.setLevel(config.log_level)
+    file_handler.setLevel(logging.DEBUG)
+    # get the root logger, setting it to level DEBUG so our handlers work
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    # add the handlers
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    # run the app
     asyncio.run(async_main())
