@@ -255,10 +255,10 @@ class WorkPackageTemplateInfo(BaseModel):
     template: WorkPackage =             Field()
     modifications: dict[str, Any] =     Field()
 
-    async def update_template(self, notify: bool=True) -> WorkPackage:
+    async def update_template(self) -> WorkPackage:
         self.modifications['lockVersion'] = self.template.lockVersion
         logging.debug(f'updating template {self.template.id} with modifications {self.modifications}')
-        data = await com.update_work_package(self.template.id, self.modifications, notify)
+        data = await com.update_work_package(self.template.id, self.modifications)
         work_package = WorkPackage(**data)
         return work_package
 

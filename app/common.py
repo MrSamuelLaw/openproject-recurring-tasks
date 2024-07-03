@@ -26,7 +26,9 @@ class APIConfig(BaseModel):
     host:       str  = Field()
     https:      bool = Field(True)
     verify_ssl: bool = Field(True)
-    log_level:  Optional[int]   =   Field()
+    notify_create:  bool = Field(True)
+    notify_weather: bool = Field(True)
+    log_level:  int  = Field(logging.WARNING)
     port:       Optional[int]  =    Field(None)
     latitude:   Optional[float] =   Field(None)
     longitude:  Optional[float] =   Field(None)
@@ -42,7 +44,8 @@ class APIConfig(BaseModel):
         if cls._instance is None:
             data = {key: environ.get(key.upper()) for key in cls.model_fields.keys()}
             data = {key: value for key, value in data.items() if value is not None}
-            data['log_level'] = getattr(logging, data.get('log_level') or 'WARNING')
+            if 'log_level' in data.keys():
+                data['log_level'] = getattr(logging, data['log_level'])
             cls._instance = cls(**data)
         return cls._instance
 
@@ -187,7 +190,7 @@ async def query_work_package_relations(offset: int=1, page_size: int=MAX_PAGE_SI
             return data
 
 
-async def create_work_package(project_id: int, payload: dict, notify: bool=True, config: APIConfig=APIConfig.from_env()) -> dict:
+async def create_work_package(project_id: int, payload: dict, notify: bool=None, config: APIConfig=APIConfig.from_env()) -> dict:
     """Creates a work package in the given project and returns the newly created work package
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
@@ -198,7 +201,7 @@ async def create_work_package(project_id: int, payload: dict, notify: bool=True,
             'Authorization': f'Basic {config.api_token}',
         }
         params = {
-            'notify': int(notify)
+            'notify': int(config.notify_create) if notify is None else int(notify)
         }
         payload = json.dumps(payload, default=str)
         async with session.post(url, data=payload, headers=headers, params=params) as response:
@@ -222,7 +225,7 @@ async def create_relation(work_package_id: int, payload: dict, config: APIConfig
             return data
 
 
-async def update_work_package(work_package_id: int, payload: dict, notify: bool=True, config: APIConfig=APIConfig.from_env()) -> dict:
+async def update_work_package(work_package_id: int, payload: dict, notify: bool=None, config: APIConfig=APIConfig.from_env()) -> dict:
     """Updates the attributes defined in payload for the work package with the id = work_package_id
     """
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=config.verify_ssl)) as session:
@@ -233,7 +236,7 @@ async def update_work_package(work_package_id: int, payload: dict, notify: bool=
             'Authorization': f'Basic {config.api_token}',
         }
         params = {
-            'notify': int(notify)
+            'notify': int(config.notify_update) if notify is None else int(notify)
         }
         payload = json.dumps(payload, default=str)
         async with session.patch(url, data=payload, headers=headers, params=params) as response:
