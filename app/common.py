@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 # ————————————————————————— Module Scoped Variables —————————————————————————
-LOGGER = logging.getLogger()
 MAX_PAGE_SIZE = 1000
 
 
@@ -26,8 +25,8 @@ class APIConfig(BaseModel):
     host:       str  = Field()
     https:      bool = Field(True)
     verify_ssl: bool = Field(True)
-    notify_create:  bool = Field(True)
-    notify_weather: bool = Field(True)
+    notify_create:  bool = Field(True)  # notify when creating a new work package
+    notify_update:  bool = Field(True)  # notify when update a template work package
     log_level:  int  = Field(logging.WARNING)
     port:       Optional[int]  =    Field(None)
     latitude:   Optional[float] =   Field(None)
