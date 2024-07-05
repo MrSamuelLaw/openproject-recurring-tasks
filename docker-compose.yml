@@ -5,7 +5,7 @@ services:
     container_name: openproject-recurring-tasks
     env_file: ".env"
     environment:
-      - TZ='America/Chicago'
+      TZ: America/Chicago
     volumes:
       - type: bind
         source: ./app
