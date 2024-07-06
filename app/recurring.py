@@ -579,26 +579,30 @@ async def async_main():
 
 
 if __name__ == '__main__':
-    # load in configs
-    config = com.APIConfig.from_env()
+    try:
+        # load in configs
+        config = com.APIConfig.from_env()
 
-    # setup the handlers
-    console_handler = logging.StreamHandler(stream=sys.stdout)
-    file_handler = logging.FileHandler('/app/logs/app.log')
-    # format the logs
-    format = '%(asctime)s - %(levelname)s - %(message)s'
-    formatter = logging.Formatter(format)
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-    # set the log levels
-    console_handler.setLevel(config.log_level)
-    file_handler.setLevel(logging.DEBUG)
-    # get the root logger, setting it to level DEBUG so our handlers work
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    # add the handlers
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
+        # setup the handlers
+        console_handler = logging.StreamHandler(stream=sys.stdout)
+        file_handler = logging.FileHandler('/app/logs/app.log')
+        # format the logs
+        format = '%(asctime)s - %(levelname)s - %(message)s'
+        formatter = logging.Formatter(format)
+        console_handler.setFormatter(formatter)
+        file_handler.setFormatter(formatter)
+        # set the log levels
+        console_handler.setLevel(config.log_level)
+        file_handler.setLevel(logging.DEBUG)
+        # get the root logger, setting it to level DEBUG so our handlers work
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+        # add the handlers
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
 
-    # run the app
-    asyncio.run(async_main())
+        # run the app
+        asyncio.run(async_main())
+    
+    except Exception as e:
+        logging.exception('Exited with an exception')
