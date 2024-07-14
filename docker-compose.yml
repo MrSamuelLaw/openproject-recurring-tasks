@@ -1,6 +1,7 @@
 services:
   openproject-recurring-tasks:
     build: .
+    restart: unless-stopped
     image: openproject-recurring-tasks
     container_name: openproject-recurring-tasks
     env_file: ".env"
