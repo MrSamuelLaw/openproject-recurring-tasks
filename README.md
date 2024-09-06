@@ -38,6 +38,12 @@ In the image below, I have created a work package that will be cloned into the p
 
 ![alt text](images/fixed_day_of_month_example.png)
 
+### Fixed Day Of Year
+
+In the image below, I have created a work package that will be cloned into the project named Main on the 6th of each September every year. Note that the day must exist in the month, or the work package will not be cloned.
+
+![alt text](images/fixed_day_of_year_example.png)
+
 ### Weather Forecast
 
 In the image below, I have created a work package that will be clone into the project Main when a weather code between (inclusive) 63 to 67 or 71 to 77 or 81 to 99 is in the forecast for the next 1 days. The template will only be cloned on the rising edge of the forecast intersecting with the desired weather codes. Put another way, if it storms every day for a week, this template will only be created one day before the first storm, as the transition from no storms in the next day to storms in the next day occurs only prior to the first day or stormy weather.
@@ -68,6 +74,11 @@ new work packages.
     *   **Fixed Day Of Month:**
         
         *   Clones the work package into the target project project on this day of the month every month (if it has that day)
+
+    *   **Fixed Day Of Year:**
+
+        *   Clones the work package into the target project on the date every year.
+            Note, that the date precedence used is start date, then due date, and finally date.
             
     *   **Weather Forecast:**
         
@@ -99,6 +110,10 @@ new work packages.
     *   **Fixed Day Of Month:**
         
         *   Clones the work package into the target project project on this day of the month every month (if it has that day)
+
+    *   **Fixed Day Of Year:**
+
+        *  **N/A**
             
     *   **Weather Forecast:**
         

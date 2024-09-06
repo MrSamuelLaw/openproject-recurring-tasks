@@ -336,7 +336,7 @@ async def calculate_fixed_delay_scheduling_infos(templates: list[WorkPackage]) -
     [mapping[r.to].append(r.from_)  for r in relations]
     for template in templates:
         if not mapping[template.id]:
-            interval = template['Interval/Day']
+            interval = template['Interval/Day Of Month']
             dueDate = date.today() + timedelta(days=interval)
             clone_info = WorkPackageCloneInfo(
                 template=template,
@@ -368,7 +368,7 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
             start = t['startDate'] or t['date_']
             today = date.today()
             delta: timedelta = today - start
-            interval = t['Interval/Day']
+            interval = t['Interval/Day Of Month']
             remainder = timedelta(days = interval - (delta.days % interval))
             next_date = start + delta + remainder
             dates[t.id] = next_date
@@ -436,7 +436,7 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
     for t in templates.values():
         try:
             today = date.today()
-            day = t['Interval/Day']
+            day = t['Interval/Day Of Month']
             # if day is in the past look to next months
             next_date = today.replace(day=day)
             if next_date <= today:
@@ -570,7 +570,7 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
         return []
 
     # get the number of days to query weather for
-    num_days = max((t['Interval/Day'] for t in templates))
+    num_days = max((t['Interval/Day Of Month'] for t in templates))
     weather_data = await com.query_forecast(num_days)
     forecast_codes = weather_data['minutely_15']['weather_code']
 
@@ -578,7 +578,7 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
         """Checks if the forecast weather codes intersect with the templates
         weather codes and returns true if so.
         """
-        days_out = template['Interval/Day']
+        days_out = template['Interval/Day Of Month']
         idx = days_out * 24 * 4 # days out * hours in a day * quarters in an hour
         idx = min((idx, len(forecast_codes)))
         codes = set(forecast_codes[: idx])
