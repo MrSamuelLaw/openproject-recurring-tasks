@@ -297,6 +297,7 @@ async def calculate_scheduling_infos() -> list[WorkPackageSchedulingInfo]:
         calculate_fixed_delay_scheduling_infos(templates),
         calculate_fixed_interval_scheduling_infos(templates),
         calculate_fixed_day_of_month_clone_infos(templates),
+        calculate_fixed_day_of_year_clone_infos(templates),
         calculate_weather_dependent_clone_infos(templates)
     )
     scheduling_infos: list[WorkPackageSchedulingInfo] = list(chain(*data))
@@ -335,7 +336,7 @@ async def calculate_fixed_delay_scheduling_infos(templates: list[WorkPackage]) -
     [mapping[r.to].append(r.from_)  for r in relations]
     for template in templates:
         if not mapping[template.id]:
-            interval = template['Interval/Day Of Month']
+            interval = template['Interval/Day']
             dueDate = date.today() + timedelta(days=interval)
             clone_info = WorkPackageCloneInfo(
                 template=template,
@@ -367,7 +368,7 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
             start = t['startDate'] or t['date_']
             today = date.today()
             delta: timedelta = today - start
-            interval = t['Interval/Day Of Month']
+            interval = t['Interval/Day']
             remainder = timedelta(days = interval - (delta.days % interval))
             next_date = start + delta + remainder
             dates[t.id] = next_date
@@ -413,7 +414,7 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
                         'dueDate': dueDate
                     }
                 )
-                scheduling_info = WorkPackageSchedulingInfo(clone_info=clone_info)
+                scheduling_info = WorkPackageSchedulingInfo(clone_info = clone_info)
                 scheduling_infos.append(scheduling_info)
             except KeyError as e:
                 logging.warning('Failed to create clone info for work package %d with error %s', template.id, e)
@@ -435,9 +436,9 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
     for t in templates.values():
         try:
             today = date.today()
-            day = t['Interval/Day Of Month']
+            day = t['Interval/Day']
             # if day is in the past look to next months
-            next_date = today.replace(day = day)
+            next_date = today.replace(day=day)
             if next_date <= today:
                 next_date = next_date + relativedelta(months=1)
             dates[t.id] = next_date
@@ -492,6 +493,74 @@ async def calculate_fixed_day_of_month_clone_infos(templates: list[WorkPackage])
     return scheduling_infos
 
 
+async def calculate_fixed_day_of_year_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
+    templates = {t.id: t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Fixed Day Of Year'}
+
+    # short circuit evaluation
+    logging.debug('%d fixed day of year schedule templates found', len(templates))
+    if not templates:
+        return []
+
+    # calculate next occurrence date
+    dates = {}
+    for t in templates.values():
+        try:
+            today = date.today()
+            next_date = t.startDate or t.dueDate or t.date_
+            next_date = next_date.replace(year=today.year)
+            dates[t.id] = next_date
+        except (TypeError, ValueError) as e:
+            logging.warning('Invalid recurring config for work package %d with error %s', t.id, e)
+
+    if not dates:
+        duplicates = []
+    else:
+        # queries for duplicated so we can get the info on them
+        filters = [{'duplicates': {'operator': '=', 'values': list(templates.keys())}}]
+        duplicates = await WorkPackage.query_work_packages(filters=filters)
+        duplicates = {d.id: d for d in duplicates if (d.startDate or d.dueDate or d.date_) in dates.values()}
+
+
+    # query the relations so we can link duplicated to templates with short circuiting
+    if not duplicates:
+        relations = []
+    else:
+        filters = [
+            {'to': {'operator': '=', 'values': list(templates.keys())}},
+            {'from': {'operator': '=', 'values': list(duplicates.keys())}},
+            {'type': {'operator': '=', 'values': ['duplicates']}}
+        ]
+        relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
+
+    # compute the clones from the mapping
+    scheduling_infos: list[WorkPackageSchedulingInfo] = []
+    mapping = defaultdict(list)
+    for r in relations:
+        d = duplicates[r.from_]
+        if (d.startDate or d.dueDate or d.date_) == dates[r.to]:
+            mapping[r.to].append(r.from_)
+    for template in templates.values():
+        if not mapping[template.id]:
+            try:
+                dueDate = dates[template.id]
+                clone_info = WorkPackageCloneInfo(
+                    template=template,
+                    modifications = {
+                        'date': dueDate,
+                        'startDate': dueDate,
+                        'dueDate': dueDate
+                    }
+                )
+                scheduling_info = WorkPackageSchedulingInfo(clone_info=clone_info)
+                scheduling_infos.append(scheduling_info)
+            except KeyError as e:
+                logging.warning('Failed to create clone info for work package %d with error %s', template.id, e)
+
+    logging.debug('%d fixed day of year scheduling_infos calculated', len(scheduling_infos))
+    return scheduling_infos
+
+
+
 async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) -> list[WorkPackageSchedulingInfo]:
     templates = [t for t in templates if t['Auto Scheduling Algorithm']['title'] == 'Weather Forecast']
 
@@ -501,7 +570,7 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
         return []
 
     # get the number of days to query weather for
-    num_days = max((t['Interval/Day Of Month'] for t in templates))
+    num_days = max((t['Interval/Day'] for t in templates))
     weather_data = await com.query_forecast(num_days)
     forecast_codes = weather_data['minutely_15']['weather_code']
 
@@ -509,7 +578,7 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
         """Checks if the forecast weather codes intersect with the templates
         weather codes and returns true if so.
         """
-        days_out = template['Interval/Day Of Month']
+        days_out = template['Interval/Day']
         idx = days_out * 24 * 4 # days out * hours in a day * quarters in an hour
         idx = min((idx, len(forecast_codes)))
         codes = set(forecast_codes[: idx])
