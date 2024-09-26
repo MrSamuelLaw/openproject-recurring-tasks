@@ -1,6 +1,7 @@
 import sys
 import logging
 import asyncio
+from pathlib import Path
 from re import fullmatch
 from itertools import chain
 from collections import defaultdict
@@ -645,6 +646,16 @@ async def async_main():
     template_infos = [si.template_info for si in scheduling_infos if si.template_info is not None]
     logging.info('Update %d template work packages', len(template_infos))
     await asyncio.gather(*[ti.update_template() for ti in template_infos])
+
+    # trims up the log files
+    path = Path('./logs/app.log').resolve()
+    lines = path.read_text().splitlines()
+    if len(lines) > 10_000:
+        lines = lines[::-1]
+        lines = lines[:10_000]
+        lines = lines[::-1]
+    lines = '\n'.join(lines)
+    path.write_text(lines)
 
 
 if __name__ == '__main__':
