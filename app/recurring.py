@@ -226,32 +226,38 @@ class WorkPackageCloneInfo(BaseModel):
     modifications: dict[str, Any] = Field()
 
     async def create_clone(self) -> WorkPackage:
-        logging.debug('creating clone from work package %d', self.template.id)
-        # create a copy of the template
-        clone = self.template.model_copy()
-        # apply the modifications
-        for key, val in self.modifications.items():
-            clone[key] = val
-        # get the schema to build the work package payload
-        projects = await Project.query_projects()
-        project = [p for p in projects if p.name == clone['Target Project']['title']][0]
-        schema = await WorkPackageSchema.query_work_package_schema(project.id, clone.type_id)
-        payload = clone.build_work_package_payload(schema)
-        # create the new work package
-        data = await com.create_work_package(project.id, payload)
-        new_work_package = WorkPackage(**data)
-        relation = WorkPackageRelation(**{
-            '_links': {
-                'from': {'href': f'/api/v3/work_packages/{new_work_package.id}'},
-                'to': {'href': f'/api/v3/work_packages/{self.template.id}'}
-            },
-            'name': 'duplicates',
-            'type': 'duplicates',
-            'reverseType': 'duplicated'
-        })
-        payload = relation.build_work_package_relation_payload()
-        await com.create_relation(new_work_package.id, payload)
-        return new_work_package
+        try:
+            logging.debug('creating clone from work package %d', self.template.id)
+            # create a copy of the template
+            clone = self.template.model_copy()
+            # apply the modifications
+            for key, val in self.modifications.items():
+                clone[key] = val
+            # get the schema to build the work package payload
+            projects = await Project.query_projects()
+            try:
+                project = [p for p in projects if p.name == clone['Target Project']['title']][0]
+            except IndexError:
+                raise ValueError(f'Failed to find a target workpackge for clone with {self.template.id=}')
+            schema = await WorkPackageSchema.query_work_package_schema(project.id, clone.type_id)
+            payload = clone.build_work_package_payload(schema)
+            # create the new work package
+            data = await com.create_work_package(project.id, payload)
+            new_work_package = WorkPackage(**data)
+            relation = WorkPackageRelation(**{
+                '_links': {
+                    'from': {'href': f'/api/v3/work_packages/{new_work_package.id}'},
+                    'to': {'href': f'/api/v3/work_packages/{self.template.id}'}
+                },
+                'name': 'duplicates',
+                'type': 'duplicates',
+                'reverseType': 'duplicated'
+            })
+            payload = relation.build_work_package_relation_payload()
+            await com.create_relation(new_work_package.id, payload)
+            return new_work_package
+        except Exception as e:
+            logger.exception(f'failed to create clone with {self.template.id=}')
 
 
 class WorkPackageTemplateInfo(BaseModel):
@@ -417,7 +423,7 @@ async def calculate_fixed_interval_scheduling_infos(templates: list[WorkPackage]
                 )
                 scheduling_info = WorkPackageSchedulingInfo(clone_info = clone_info)
                 scheduling_infos.append(scheduling_info)
-            except KeyError as e:
+            except Exception as e:
                 logging.warning('Failed to create clone info for work package %d with error %s', template.id, e)
 
     logging.debug('%d fixed interval scheduling_infos calculated', len(scheduling_infos))
