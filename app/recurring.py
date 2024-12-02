@@ -654,7 +654,7 @@ async def async_main():
     await asyncio.gather(*[ti.update_template() for ti in template_infos])
 
     # trims up the log files
-    path = Path('./logs/app.log').resolve()
+    path = Path('/app/logs/app.log').resolve()
     lines = path.read_text().splitlines()
     if len(lines) > 10_000:
         lines = lines[::-1]
