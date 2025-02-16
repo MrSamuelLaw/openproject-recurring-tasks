@@ -1,3 +1,8 @@
+networks:
+  default:
+    name: skynet
+    external: true
+
 services:
   openproject-recurring-tasks:
     build: .
