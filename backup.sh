@@ -8,4 +8,4 @@ targetdir="${1}/${sourcedir##*/}";
 cd $sourcedir;
 
 # run rsync and delete any files that have been deleted locally
-rsync -aP --delete $sourcedir $targetdir;
+sshpass -e rsync -aP --delete $sourcedir $targetdir;
