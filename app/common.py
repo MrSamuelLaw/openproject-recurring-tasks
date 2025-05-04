@@ -82,7 +82,7 @@ async def query_forecast(num_days: int, config: APIConfig=APIConfig.from_env()):
             'latitude': config.latitude,
             'longitude': config.longitude,
             'forecast_days': num_days,
-            'minutely_15': 'weather_code'
+            'minutely_15': ','.join(['precipitation', 'wind_speed_10m' ,'wind_gusts_10m'])
         }
         async with session.get(url, params=params) as response:
             data: dict = await response.json()

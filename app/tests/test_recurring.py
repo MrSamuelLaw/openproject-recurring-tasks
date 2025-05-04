@@ -76,7 +76,7 @@ class TestCommon(unittest.TestCase):
                 self.assertEqual(wp['customField1'], 'foo')
                 self.assertEqual(wp['customField2'], 'bar')
 
-
+    def test_can_get_weather_
 
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=False)

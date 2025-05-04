@@ -46,7 +46,7 @@ In the image below, I have created a work package that will be cloned into the p
 
 ### Weather Forecast
 
-In the image below, I have created a work package that will be clone into the project Main when a weather code between (inclusive) 63 to 67 or 71 to 77 or 81 to 99 is in the forecast for the next 1 days. The template will only be cloned on the rising edge of the forecast intersecting with the desired weather codes. Put another way, if it storms every day for a week, this template will only be created one day before the first storm, as the transition from no storms in the next day to storms in the next day occurs only prior to the first day or stormy weather.
+In the image below, I have created a work package that will be clone into the project Main when the precipitation chance goes above 0 anytime in the next two days.. The template will only be cloned on the rising edge of the forecast exceeding the any of the specified parameters. Put another way, if it storms every day for a week, this template will only be created one day before the first storm, as the transition from no storms in the next day to storms in the next day occurs only prior to the first day or stormy weather.
 
 ![alt text](images/weather_forecase_example.png)
 
@@ -133,23 +133,25 @@ new work packages.
 ## Weather Event Recurring Fields (Optional)
 Weather event recurring fields are optional and allow the automation scripts to create work packages based on weather events.  
 
-* Weather Codes
+* Weather Conditions
     type: Text  
     description/help-text:  
     ```md
-        Weather codes for which to create a new weather forecast recurring work package.
+        JSON formatted weather conditions that if exceeded in the forecast will trigger a work package to be generated.
 
-    *   If using multiple weather codes, they must be separated by a comma (no spaces), for example, 71, 77
-        
-    *   If using a range of weather codes, they must be separated by a dash (no spaces), for example, 71-77
-        
-    *   Multiple selection &amp; ranges can be used together, for example, 71-77,80-82
+    For example:
+
+    * {"precipitation":20}   this will cause a work package to be generated  if there is greater than a 20 percent chance of rain in the forecast.
+
+    * {"wind_gusts_10m":30}   this will cause a work package to be generated  if there is greater than 30 km/hr wind gusts in the forecast.
+
+    * {"wind_speed_10m":15}   this will cause a work package to be generated  if there is greater than 15 km/hr average wind speed in the forecast.
         
 
     see [https://open-meteo.com/en/docs](https://open-meteo.com/en/docs) for more info
     ```
 
-    ![alt text](images/weather_codes.png)
+    ![alt text](images/weather_conditions.png)
 
 * Weather Detected Status
     type: Boolean  

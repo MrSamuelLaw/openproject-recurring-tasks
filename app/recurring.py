@@ -1,4 +1,6 @@
+import re
 import sys
+import json
 import logging
 import asyncio
 from pathlib import Path
@@ -579,33 +581,19 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
     # get the number of days to query weather for
     num_days = max((t['Interval/Day Of Month'] for t in templates))
     weather_data = await com.query_forecast(num_days)
-    forecast_codes = weather_data['minutely_15']['weather_code']
-
-    def forecast_codes_in_work_package(forecast_codes: int | tuple[int, int], template: WorkPackage):
-        """Checks if the forecast weather codes intersect with the templates
-        weather codes and returns true if so.
-        """
-        days_out = template['Interval/Day Of Month']
-        idx = days_out * 24 * 4 # days out * hours in a day * quarters in an hour
-        idx = min((idx, len(forecast_codes)))
-        codes = set(forecast_codes[: idx])
-        t_codes = template['Weather Codes'].split(',')
-        t_codes = [c.strip() for c in t_codes]
-        flag = False
-        for tc in t_codes:
-            if '-' in tc:
-                left, right = [int(v) for v in tc.split('-')]
-                codes = [v for v in codes if left <= v <= right]
-                if codes:
-                    logging.debug('Matched the codes %s in expresion %s', codes, tc)
-                    flag = True
-            else:
-                tc = int(tc)
-                codes = [v for v in codes if tc == v]
-                if codes:
-                    logging.debug('Matched the codes %s in expresion %s', codes, tc)
-                    flag = True
-        return flag
+    weather_data = weather_data['minutely_15']
+    
+    def are_conditions_met(weather_data: dict, template: WorkPackage):
+        # get the config from the work package
+        config = template['Weather Conditions']
+        config = json.loads(config)
+        
+        # check for max conditions
+        for param, forecast_values in weather_data.items():
+            max_allowed_value = config.get(param)
+            if (max_allowed_value is not None) and (max(forecast_values) > max_allowed_value):
+                return True
+        return False
 
     # create new clones when codes in forecast goes from false to true
     scheduling_infos = []
@@ -613,7 +601,7 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
     for t in templates:
         scheduling_info = WorkPackageSchedulingInfo()
         previously_detected = t[fieldName]
-        currently_detected = forecast_codes_in_work_package(forecast_codes, t)
+        currently_detected = are_conditions_met(weather_data, t)
         if currently_detected and (not previously_detected):
             dueDate = date.today()
             clone_info = WorkPackageCloneInfo(
