@@ -587,11 +587,13 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
         # get the config from the work package
         config = template['Weather Conditions']
         config = json.loads(config)
+        num_days = template['Interval/Day Of Month']
+        idx = max(0, (num_days * 24 * 4) - 1)  # convert days to quarter hours then zero idx based
         
         # check for max conditions
         for param, forecast_values in weather_data.items():
             max_allowed_value = config.get(param)
-            if (max_allowed_value is not None) and (max(forecast_values) > max_allowed_value):
+            if (max_allowed_value is not None) and (max(forecast_values[:idx]) > max_allowed_value):
                 return True
         return False
 
