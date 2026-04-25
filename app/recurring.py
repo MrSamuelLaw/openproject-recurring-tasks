@@ -654,6 +654,8 @@ async def async_main():
         lines = lines[:10_000]
         lines = lines[::-1]
     lines = '\n'.join(lines)
+    if lines:
+        lines = f'{lines}\n'
     path.write_text(lines)
 
 

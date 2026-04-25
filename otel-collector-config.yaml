@@ -1,0 +1,37 @@
+receivers:
+  filelog:
+    include:
+      - /app/logs/app.log
+    start_at: beginning
+    include_file_path: true
+    operators:
+      - type: regex_parser
+        regex: '^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) - (?P<level>[A-Z]+) - (?P<msg>.*)$'
+        timestamp:
+          parse_from: attributes.ts
+          layout: '%Y-%m-%d %H:%M:%S,%f'
+          location: America/Chicago
+        severity:
+          parse_from: attributes.level
+      - type: move
+        from: attributes.msg
+        to: body
+
+processors:
+  resource:
+    attributes:
+      - action: upsert
+        key: service.name
+        value: openproject-recurring-tasks
+  batch:
+
+exporters:
+  otlphttp:
+    endpoint: https://otlp.breakingthelaw.xyz:4318
+
+service:
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [resource, batch]
+      exporters: [otlphttp]
