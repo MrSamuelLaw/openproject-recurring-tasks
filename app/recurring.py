@@ -581,6 +581,9 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
     # get the number of days to query weather for
     num_days = max((t['Interval/Day Of Month'] for t in templates))
     weather_data = await com.query_forecast(num_days)
+    if weather_data is None:
+        logging.warning('Weather forecast unavailable, skipping weather dependent scheduling')
+        return []
     weather_data = weather_data['minutely_15']
     
     def are_conditions_met(weather_data: dict, template: WorkPackage):

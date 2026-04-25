@@ -85,6 +85,9 @@ async def query_forecast(num_days: int, config: APIConfig=APIConfig.from_env()):
             'minutely_15': ','.join(['precipitation', 'wind_speed_10m' ,'wind_gusts_10m'])
         }
         async with session.get(url, params=params) as response:
+            if response.status != 200:
+                logging.warning(f'Weather API returned status {response.status}, skipping forecast')
+                return None
             data: dict = await response.json()
             return data
 
