@@ -600,6 +600,30 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
                 return True
         return False
 
+    # query existing duplicates dated today so we don't create dupes if the
+    # template state flag failed to update on a prior run
+    today = date.today()
+    template_ids = [t.id for t in templates]
+    filters = [{'duplicates': {'operator': '=', 'values': template_ids}}]
+    duplicates = await WorkPackage.query_work_packages(filters=filters)
+    duplicates = {d.id: d for d in duplicates if (d.startDate or d.dueDate or d.date_) == today}
+
+    if not duplicates:
+        relations = []
+    else:
+        filters = [
+            {'to': {'operator': '=', 'values': template_ids}},
+            {'from': {'operator': '=', 'values': list(duplicates.keys())}},
+            {'type': {'operator': '=', 'values': ['duplicates']}}
+        ]
+        relations = await WorkPackageRelation.query_work_package_relations(filters=filters)
+
+    existing_clones_for_today = defaultdict(list)
+    for r in relations:
+        d = duplicates[r.from_]
+        if (d.startDate or d.dueDate or d.date_) == today:
+            existing_clones_for_today[r.to].append(r.from_)
+
     # create new clones when codes in forecast goes from false to true
     scheduling_infos = []
     fieldName = 'Weather Detected Status'
@@ -607,8 +631,8 @@ async def calculate_weather_dependent_clone_infos(templates: list[WorkPackage]) 
         scheduling_info = WorkPackageSchedulingInfo()
         previously_detected = t[fieldName]
         currently_detected = are_conditions_met(weather_data, t)
-        if currently_detected and (not previously_detected):
-            dueDate = date.today()
+        if currently_detected and (not previously_detected) and (not existing_clones_for_today[t.id]):
+            dueDate = today
             clone_info = WorkPackageCloneInfo(
                 template=t,
                 modifications = {
